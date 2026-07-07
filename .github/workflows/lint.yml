@@ -27,6 +27,11 @@ jobs:
           pip install ansible-core ansible-lint yamllint
           ansible-galaxy collection install kubernetes.core
 
+      - name: Symlink role to its namespace path (required for syntax-check)
+        run: |
+          mkdir -p ~/.ansible/roles
+          ln -s "${GITHUB_WORKSPACE}" ~/.ansible/roles/apellini.data_seed
+
       - name: yamllint
         run: yamllint -d relaxed .
 
