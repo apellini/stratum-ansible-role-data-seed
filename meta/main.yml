@@ -1,0 +1,21 @@
+---
+galaxy_info:
+  role_name: data_seed
+  author: apellini
+  description: >
+    Restore Qdrant vector KB and MLflow model artifacts from GCS cache on session
+    boot; creates Ceph RGW user + mlflow-s3-creds k8s secret as a prerequisite.
+    Soft-skips both restores when no GCS data exists (first run).
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: EL
+      versions:
+        - "9"
+  galaxy_tags:
+    - kubernetes
+    - mlflow
+    - qdrant
+    - ceph
+    - stratum
+dependencies: []

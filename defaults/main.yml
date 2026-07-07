@@ -1,0 +1,27 @@
+---
+# GCS cache bucket — set by harness.sh via STRATUM_GCS_CACHE_BUCKET
+data_seed_cache_bucket: ""
+
+# Ceph RGW S3 endpoint (port 7480 as configured in rook-ceph-cluster chart)
+data_seed_rgw_endpoint: "http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:7480"
+
+# CephObjectStore name (must match the name in rook-ceph-cluster helm values)
+data_seed_rgw_object_store: "ceph-objectstore"
+
+# CephObjectStoreUser name for MLflow
+data_seed_rgw_user: "mlflow-user"
+
+# S3 bucket name for MLflow artifacts (created in RGW by this role)
+data_seed_mlflow_bucket: "mlflow"
+
+# Namespace where MLflow is deployed
+data_seed_mlflow_namespace: "stratum-ops"
+
+# Namespace where Qdrant and PostgreSQL are deployed
+data_seed_data_namespace: "stratum-data"
+
+# Qdrant collection to restore
+data_seed_qdrant_collection: "stratum-kb"
+
+# Qdrant snapshot filename in GCS
+data_seed_qdrant_snapshot_name: "stratum-kb.snapshot"

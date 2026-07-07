@@ -1,0 +1,8 @@
+---
+- name: Syntax-check stub for apellini.data_seed
+  hosts: all
+  gather_facts: false
+  roles:
+    - role: apellini.data_seed
+      vars:
+        data_seed_cache_bucket: stub-bucket

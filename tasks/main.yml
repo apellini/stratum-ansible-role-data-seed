@@ -1,0 +1,247 @@
+---
+# ── 0. Prerequisites ──────────────────────────────────────────────────────────
+
+- name: Install google-cloud-sdk repo (Rocky Linux / RHEL)
+  ansible.builtin.yum_repository:
+    name: google-cloud-sdk
+    description: Google Cloud SDK
+    baseurl: https://packages.cloud.google.com/yum/repos/cloud-sdk-el9-x86_64
+    enabled: true
+    gpgcheck: true
+    repo_gpgcheck: false
+    gpgkey: https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+  when: ansible_facts['os_family'] == "RedHat"
+
+- name: Install google-cloud-sdk and python3-pip
+  ansible.builtin.package:
+    name:
+      - google-cloud-sdk
+      - python3-pip
+    state: present
+
+- name: Install AWS CLI via pip
+  ansible.builtin.pip:
+    name: awscli
+    state: present
+
+# ── 1. Pre-flight waits ───────────────────────────────────────────────────────
+
+- name: Wait for Qdrant deployment ready
+  ansible.builtin.command:
+    cmd: kubectl rollout status -n {{ data_seed_data_namespace }} deployment/qdrant --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  changed_when: false
+
+- name: Wait for MLflow-embedded PostgreSQL StatefulSet ready
+  ansible.builtin.command:
+    cmd: kubectl rollout status -n {{ data_seed_mlflow_namespace }} statefulset/mlflow-postgresql --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  changed_when: false
+
+- name: Wait for RGW pod ready
+  ansible.builtin.command:
+    cmd: >
+      kubectl wait -n rook-ceph pod
+      -l app=rook-ceph-rgw
+      --for=condition=Ready
+      --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  changed_when: false
+
+# ── 2. RGW user + mlflow-s3-creds ────────────────────────────────────────────
+# Create the CephObjectStoreUser so Rook generates the S3 credentials secret,
+# then copy those credentials into mlflow-s3-creds in stratum-ops so the
+# MLflow pod (waiting on that secret) can start.
+
+- name: Create CephObjectStoreUser for MLflow
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: ceph.rook.io/v1
+      kind: CephObjectStoreUser
+      metadata:
+        name: "{{ data_seed_rgw_user }}"
+        namespace: rook-ceph
+      spec:
+        store: "{{ data_seed_rgw_object_store }}"
+        displayName: "MLflow artifact user"
+        capabilities:
+          bucket: "*"
+          object: "*"
+
+- name: Wait for Rook to provision the RGW user secret
+  kubernetes.core.k8s_info:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    api_version: v1
+    kind: Secret
+    name: "rook-ceph-object-user-{{ data_seed_rgw_object_store }}-{{ data_seed_rgw_user }}"
+    namespace: rook-ceph
+  register: _rgw_user_secret
+  until: _rgw_user_secret.resources | length > 0
+  retries: 30
+  delay: 10
+
+- name: Extract RGW credentials
+  ansible.builtin.set_fact:
+    _rgw_access_key: "{{ _rgw_user_secret.resources[0].data.AccessKey | b64decode }}"
+    _rgw_secret_key: "{{ _rgw_user_secret.resources[0].data.SecretKey | b64decode }}"
+  no_log: true
+
+- name: Create mlflow-s3-creds secret in {{ data_seed_mlflow_namespace }}
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: mlflow-s3-creds
+        namespace: "{{ data_seed_mlflow_namespace }}"
+      stringData:
+        AWS_ACCESS_KEY_ID: "{{ _rgw_access_key }}"
+        AWS_SECRET_ACCESS_KEY: "{{ _rgw_secret_key }}"
+  no_log: true
+
+- name: Create mlflow S3 bucket in Ceph RGW
+  ansible.builtin.command:
+    cmd: aws s3 mb s3://{{ data_seed_mlflow_bucket }} --endpoint-url {{ data_seed_rgw_endpoint }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ _rgw_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ _rgw_secret_key }}"
+    AWS_DEFAULT_REGION: us-east-1
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  register: _s3_mb
+  failed_when: _s3_mb.rc != 0 and 'BucketAlreadyOwnedByYou' not in _s3_mb.stderr
+  changed_when: _s3_mb.rc == 0
+  no_log: true
+
+# ── 3. Wait for MLflow (mlflow-s3-creds secret now exists) ───────────────────
+
+- name: Wait for MLflow deployment ready
+  ansible.builtin.command:
+    cmd: kubectl rollout status -n {{ data_seed_mlflow_namespace }} deployment/mlflow --timeout=300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  changed_when: false
+
+# ── 4. Qdrant snapshot restore ────────────────────────────────────────────────
+
+- name: Check for Qdrant snapshot in GCS
+  ansible.builtin.command:
+    cmd: >
+      gcloud storage ls
+      gs://{{ data_seed_cache_bucket }}/qdrant/{{ data_seed_qdrant_snapshot_name }}
+  register: _qdrant_gcs_check
+  failed_when: false
+  changed_when: false
+  environment:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+- name: Download Qdrant snapshot from GCS
+  ansible.builtin.command:
+    cmd: >
+      gcloud storage cp
+      gs://{{ data_seed_cache_bucket }}/qdrant/{{ data_seed_qdrant_snapshot_name }}
+      /tmp/{{ data_seed_qdrant_snapshot_name }}
+  when: _qdrant_gcs_check.rc == 0
+  environment:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+- name: Get Qdrant pod name
+  kubernetes.core.k8s_info:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    kind: Pod
+    namespace: "{{ data_seed_data_namespace }}"
+    label_selectors:
+      - "app.kubernetes.io/name=qdrant"
+  register: _qdrant_pods
+  when: _qdrant_gcs_check.rc == 0
+
+- name: Copy Qdrant snapshot into pod
+  ansible.builtin.command:
+    cmd: >
+      kubectl cp /tmp/{{ data_seed_qdrant_snapshot_name }}
+      {{ data_seed_data_namespace }}/{{ _qdrant_pods.resources[0].metadata.name }}:/tmp/{{ data_seed_qdrant_snapshot_name }}
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  when: _qdrant_gcs_check.rc == 0 and _qdrant_pods.resources | length > 0
+
+- name: Upload Qdrant snapshot via REST API (inside pod)
+  ansible.builtin.command:
+    cmd: >
+      kubectl exec -n {{ data_seed_data_namespace }}
+      {{ _qdrant_pods.resources[0].metadata.name }} --
+      curl -sf -X POST
+      http://localhost:6333/collections/{{ data_seed_qdrant_collection }}/snapshots/upload
+      -H 'Content-Type: multipart/form-data'
+      -F 'snapshot=@/tmp/{{ data_seed_qdrant_snapshot_name }}'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  when: _qdrant_gcs_check.rc == 0 and _qdrant_pods.resources | length > 0
+
+- name: Clean up local Qdrant snapshot
+  ansible.builtin.file:
+    path: /tmp/{{ data_seed_qdrant_snapshot_name }}
+    state: absent
+  when: _qdrant_gcs_check.rc == 0
+
+- name: Log Qdrant first-run skip
+  ansible.builtin.debug:
+    msg: "No Qdrant snapshot in GCS — first-run skip"
+  when: _qdrant_gcs_check.rc != 0
+
+# ── 5. MLflow artifact restore ────────────────────────────────────────────────
+
+- name: Check for MLflow artifacts in GCS
+  ansible.builtin.command:
+    cmd: gcloud storage ls gs://{{ data_seed_cache_bucket }}/mlflow/
+  register: _mlflow_gcs_check
+  failed_when: false
+  changed_when: false
+  environment:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+- name: Sync MLflow artifacts from GCS to local tmpdir
+  ansible.builtin.command:
+    cmd: >
+      gcloud storage rsync -r
+      gs://{{ data_seed_cache_bucket }}/mlflow/
+      /tmp/mlflow-restore/
+  when: _mlflow_gcs_check.rc == 0
+  environment:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+- name: Sync MLflow artifacts from tmpdir to Ceph S3
+  ansible.builtin.command:
+    cmd: >
+      aws s3 sync /tmp/mlflow-restore/
+      s3://{{ data_seed_mlflow_bucket }}/
+      --endpoint-url {{ data_seed_rgw_endpoint }}
+  when: _mlflow_gcs_check.rc == 0
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ _rgw_access_key }}"
+    AWS_SECRET_ACCESS_KEY: "{{ _rgw_secret_key }}"
+    AWS_DEFAULT_REGION: us-east-1
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  no_log: true
+
+- name: Clean up local MLflow restore tmpdir
+  ansible.builtin.file:
+    path: /tmp/mlflow-restore
+    state: absent
+  when: _mlflow_gcs_check.rc == 0
+
+- name: Log MLflow first-run skip
+  ansible.builtin.debug:
+    msg: "No MLflow artifacts in GCS — first-run skip"
+  when: _mlflow_gcs_check.rc != 0
