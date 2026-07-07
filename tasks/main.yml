@@ -154,6 +154,7 @@
   when: _qdrant_gcs_check.rc == 0
   environment:
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  changed_when: false
 
 - name: Get Qdrant pod name
   kubernetes.core.k8s_info:
@@ -165,21 +166,29 @@
   register: _qdrant_pods
   when: _qdrant_gcs_check.rc == 0
 
+- name: Store Qdrant pod name fact
+  ansible.builtin.set_fact:
+    _qdrant_pod_name: "{{ _qdrant_pods.resources[0].metadata.name }}"
+  when: _qdrant_gcs_check.rc == 0 and _qdrant_pods.resources | length > 0
+
 - name: Copy Qdrant snapshot into pod
   ansible.builtin.command:
-    cmd: >
-      kubectl cp /tmp/{{ data_seed_qdrant_snapshot_name }}
-      {{ data_seed_data_namespace }}/{{ _qdrant_pods.resources[0].metadata.name }}:/tmp/{{ data_seed_qdrant_snapshot_name }}
+    argv:
+      - kubectl
+      - cp
+      - "/tmp/{{ data_seed_qdrant_snapshot_name }}"
+      - "{{ data_seed_data_namespace }}/{{ _qdrant_pod_name }}:/tmp/{{ data_seed_qdrant_snapshot_name }}"
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   when: _qdrant_gcs_check.rc == 0 and _qdrant_pods.resources | length > 0
+  changed_when: false
 
 - name: Upload Qdrant snapshot via REST API (inside pod)
   ansible.builtin.command:
     cmd: >
       kubectl exec -n {{ data_seed_data_namespace }}
-      {{ _qdrant_pods.resources[0].metadata.name }} --
+      {{ _qdrant_pod_name }} --
       curl -sf -X POST
       http://localhost:6333/collections/{{ data_seed_qdrant_collection }}/snapshots/upload
       -H 'Content-Type: multipart/form-data'
@@ -188,6 +197,7 @@
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   when: _qdrant_gcs_check.rc == 0 and _qdrant_pods.resources | length > 0
+  changed_when: false
 
 - name: Clean up local Qdrant snapshot
   ansible.builtin.file:
@@ -220,6 +230,7 @@
   when: _mlflow_gcs_check.rc == 0
   environment:
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  changed_when: false
 
 - name: Sync MLflow artifacts from tmpdir to Ceph S3
   ansible.builtin.command:
@@ -234,6 +245,7 @@
     AWS_DEFAULT_REGION: us-east-1
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   no_log: true
+  changed_when: false
 
 - name: Clean up local MLflow restore tmpdir
   ansible.builtin.file:
