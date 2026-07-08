@@ -51,6 +51,12 @@
     namespace: "{{ data_seed_mlflow_namespace }}"
   register: _pg_secret
 
+- name: Decode mlflow-postgresql password and build host string
+  ansible.builtin.set_fact:
+    _pg_password: "{{ _pg_secret.resources[0].data.password | b64decode }}"
+    _pg_host: "mlflow-postgresql.{{ data_seed_mlflow_namespace }}.svc:5432"
+  no_log: true
+
 - name: Create mlflow-db-creds secret with backend store URI
   kubernetes.core.k8s:
     kubeconfig: /etc/rancher/k3s/k3s.yaml
@@ -62,7 +68,7 @@
         name: mlflow-db-creds
         namespace: "{{ data_seed_mlflow_namespace }}"
       stringData:
-        MLFLOW_BACKEND_STORE_URI: "postgresql+psycopg2://mlflow:{{ _pg_secret.resources[0].data.password | b64decode }}@mlflow-postgresql.{{ data_seed_mlflow_namespace }}.svc:5432/mlflow"
+        MLFLOW_BACKEND_STORE_URI: "postgresql+psycopg2://mlflow:{{ _pg_password }}@{{ _pg_host }}/mlflow"
   no_log: true
 
 - name: Wait for RGW pod ready
