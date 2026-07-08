@@ -34,13 +34,36 @@
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   changed_when: false
 
-- name: Wait for MLflow-embedded PostgreSQL StatefulSet ready
+- name: Wait for mlflow-postgresql StatefulSet ready (standalone bitnami/postgresql release)
   ansible.builtin.command:
     cmd: kubectl rollout status -n {{ data_seed_mlflow_namespace }} statefulset/mlflow-postgresql --timeout=300s
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   changed_when: false
+
+- name: Read mlflow-postgresql secret (bitnami auto-generated password)
+  kubernetes.core.k8s_info:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    api_version: v1
+    kind: Secret
+    name: mlflow-postgresql
+    namespace: "{{ data_seed_mlflow_namespace }}"
+  register: _pg_secret
+
+- name: Create mlflow-db-creds secret with backend store URI
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: mlflow-db-creds
+        namespace: "{{ data_seed_mlflow_namespace }}"
+      stringData:
+        MLFLOW_BACKEND_STORE_URI: "postgresql+psycopg2://mlflow:{{ _pg_secret.resources[0].data.password | b64decode }}@mlflow-postgresql.{{ data_seed_mlflow_namespace }}.svc:5432/mlflow"
+  no_log: true
 
 - name: Wait for RGW pod ready
   ansible.builtin.command:
