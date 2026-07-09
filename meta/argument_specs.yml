@@ -1,0 +1,102 @@
+---
+# meta/argument_specs.yml — apellini.data_seed
+
+argument_specs:
+  main:
+    short_description: Restore Qdrant and MLflow artifacts from GCS cache on session boot.
+    description:
+      - Downloads Qdrant vector-KB snapshot and MLflow artifacts from GCS and seeds them
+        into the running cluster. Soft-skips both restores when no GCS data exists.
+      - Creates a Ceph RGW CephObjectStoreUser and the mlflow-s3-creds / mlflow-db-creds
+        k8s secrets as prerequisites for MLflow startup.
+    options:
+      data_seed_cache_bucket:
+        type: str
+        required: true
+        description: >
+          GCS bucket name used as the persistent bootstrap cache
+          (e.g. stratum-dev-cache). Set by harness.sh via STRATUM_GCS_CACHE_BUCKET.
+
+      data_seed_rgw_endpoint:
+        type: str
+        default: "http://rook-ceph-rgw-ceph-objectstore.rook-ceph.svc:7480"
+        description: Ceph RGW S3-compatible endpoint URL inside the cluster.
+
+      data_seed_rgw_object_store:
+        type: str
+        default: ceph-objectstore
+        description: CephObjectStore resource name (must match the rook-ceph-cluster chart values).
+
+      data_seed_rgw_user:
+        type: str
+        default: mlflow-user
+        description: CephObjectStoreUser name created for MLflow artifact access.
+
+      data_seed_mlflow_bucket:
+        type: str
+        default: mlflow
+        description: S3 bucket name created in Ceph RGW for MLflow artifacts.
+
+      data_seed_mlflow_namespace:
+        type: str
+        default: stratum-ops
+        description: Kubernetes namespace where MLflow is deployed.
+
+      data_seed_data_namespace:
+        type: str
+        default: stratum-data
+        description: Kubernetes namespace where Qdrant and PostgreSQL are deployed.
+
+      data_seed_qdrant_collection:
+        type: str
+        default: stratum-kb
+        description: Qdrant collection name to restore from the snapshot.
+
+      data_seed_qdrant_snapshot_name:
+        type: str
+        default: stratum-kb.snapshot
+        description: Filename of the Qdrant snapshot object in GCS under the qdrant/ prefix.
+
+      data_seed_preflight_waits:
+        type: list
+        elements: dict
+        description: >
+          List of Kubernetes resources to poll with kubectl rollout status before seeding.
+          Each entry: name (str, label only), resource (str, e.g. deployment/foo),
+          namespace (str), enabled (bool, default true).
+          Set enabled: false on an entry to skip that wait without removing the item.
+        default:
+          - name: qdrant
+            resource: deployment/qdrant
+            namespace: stratum-data
+            enabled: true
+          - name: mlflow-postgresql
+            resource: statefulset/mlflow-postgresql
+            namespace: stratum-ops
+            enabled: true
+        options:
+          name:
+            type: str
+            required: true
+            description: Descriptive label for the wait item (used in task output only).
+          resource:
+            type: str
+            required: true
+            description: >
+              kubectl resource reference passed to rollout status,
+              e.g. deployment/qdrant or statefulset/mlflow-postgresql.
+          namespace:
+            type: str
+            required: true
+            description: Kubernetes namespace where the resource lives.
+          enabled:
+            type: bool
+            default: true
+            description: Set false to skip this wait without removing the list entry.
+
+      data_seed_wait_rgw:
+        type: bool
+        default: true
+        description: >
+          When true, waits for the Rook-Ceph RGW pod to be Ready before creating
+          the CephObjectStoreUser. Set false to skip (e.g. when RGW is not yet deployed).

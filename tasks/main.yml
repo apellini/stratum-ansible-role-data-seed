@@ -26,20 +26,14 @@
 
 # ── 1. Pre-flight waits ───────────────────────────────────────────────────────
 
-- name: Wait for Qdrant deployment ready
+- name: Wait for pre-flight resources ready
   ansible.builtin.command:
-    cmd: kubectl rollout status -n {{ data_seed_data_namespace }} deployment/qdrant --timeout=300s
+    cmd: kubectl rollout status -n {{ item.namespace }} {{ item.resource }} --timeout=300s
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-  changed_when: false
-
-- name: Wait for mlflow-postgresql StatefulSet ready (standalone bitnami/postgresql release)
-  ansible.builtin.command:
-    cmd: kubectl rollout status -n {{ data_seed_mlflow_namespace }} statefulset/mlflow-postgresql --timeout=300s
-  environment:
-    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  loop: "{{ data_seed_preflight_waits }}"
+  when: item.enabled | default(true)
   changed_when: false
 
 - name: Read mlflow-postgresql secret (bitnami auto-generated password)
@@ -81,6 +75,7 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  when: data_seed_wait_rgw | default(true)
   changed_when: false
 
 # ── 2. RGW user + mlflow-s3-creds ────────────────────────────────────────────
