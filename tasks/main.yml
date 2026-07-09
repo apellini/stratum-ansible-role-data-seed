@@ -34,7 +34,15 @@
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   loop: "{{ data_seed_preflight_waits }}"
   when: item.enabled | default(true)
+  register: _preflight_results
+  failed_when: _preflight_results.rc != 0 and 'NotFound' not in (_preflight_results.stderr | default(''))
   changed_when: false
+
+- name: Warn on absent pre-flight resource (deploy not yet present — seeding without wait)
+  ansible.builtin.debug:
+    msg: "Pre-flight skip — {{ item.item.resource }} not found in {{ item.item.namespace }}"
+  loop: "{{ _preflight_results.results }}"
+  when: "'NotFound' in (item.stderr | default(''))"
 
 - name: Read mlflow-postgresql secret (bitnami auto-generated password)
   kubernetes.core.k8s_info:
