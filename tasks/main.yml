@@ -84,7 +84,18 @@
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   when: data_seed_wait_rgw | default(true)
+  register: _rgw_wait_result
+  failed_when: >-
+    _rgw_wait_result.rc != 0 and
+    'no matching resources found' not in (_rgw_wait_result.stderr | default(''))
   changed_when: false
+
+- name: Warn on absent RGW pod (rook-ceph not yet deployed — seeding without wait)
+  ansible.builtin.debug:
+    msg: "RGW pre-flight skip — no rook-ceph-rgw pod found (rook-ceph not yet deployed)"
+  when:
+    - data_seed_wait_rgw | default(true)
+    - "'no matching resources found' in (_rgw_wait_result.stderr | default(''))"
 
 # ── 2. RGW user + mlflow-s3-creds ────────────────────────────────────────────
 # Create the CephObjectStoreUser so Rook generates the S3 credentials secret,
