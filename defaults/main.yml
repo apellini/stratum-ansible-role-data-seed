@@ -25,3 +25,16 @@ data_seed_qdrant_collection: "stratum-kb"
 
 # Qdrant snapshot filename in GCS
 data_seed_qdrant_snapshot_name: "stratum-kb.snapshot"
+
+# Pre-flight readiness waits — set enabled: false to skip a component
+data_seed_preflight_waits:
+  - name: qdrant
+    resource: deployment/qdrant
+    namespace: "{{ data_seed_data_namespace }}"
+    enabled: true
+  - name: mlflow-postgresql
+    resource: statefulset/mlflow-postgresql
+    namespace: "{{ data_seed_mlflow_namespace }}"
+    enabled: true
+
+data_seed_wait_rgw: true
