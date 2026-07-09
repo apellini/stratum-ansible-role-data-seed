@@ -151,9 +151,22 @@
         AWS_SECRET_ACCESS_KEY: "{{ _rgw_secret_key }}"
   no_log: true
 
+- name: Resolve RGW service ClusterIP (host cannot resolve cluster DNS)
+  ansible.builtin.command:
+    cmd: >
+      kubectl get svc -n rook-ceph
+      rook-ceph-rgw-{{ data_seed_rgw_object_store }}
+      -o jsonpath={.spec.clusterIP}
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  register: _rgw_cluster_ip
+  changed_when: false
+
 - name: Create mlflow S3 bucket in Ceph RGW
   ansible.builtin.command:
-    cmd: aws s3 mb s3://{{ data_seed_mlflow_bucket }} --endpoint-url {{ data_seed_rgw_endpoint }}
+    cmd: >
+      aws s3 mb s3://{{ data_seed_mlflow_bucket }}
+      --endpoint-url http://{{ _rgw_cluster_ip.stdout }}:7480
   environment:
     AWS_ACCESS_KEY_ID: "{{ _rgw_access_key }}"
     AWS_SECRET_ACCESS_KEY: "{{ _rgw_secret_key }}"
@@ -279,7 +292,7 @@
     cmd: >
       aws s3 sync /tmp/mlflow-restore/
       s3://{{ data_seed_mlflow_bucket }}/
-      --endpoint-url {{ data_seed_rgw_endpoint }}
+      --endpoint-url http://{{ _rgw_cluster_ip.stdout }}:7480
   when: _mlflow_gcs_check.rc == 0
   environment:
     AWS_ACCESS_KEY_ID: "{{ _rgw_access_key }}"
