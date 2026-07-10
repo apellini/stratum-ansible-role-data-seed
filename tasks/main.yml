@@ -280,7 +280,7 @@
 - name: Sync MLflow artifacts from GCS to local tmpdir
   ansible.builtin.command:
     cmd: >
-      gcloud storage rsync -r
+      gsutil -m rsync -r
       gs://{{ data_seed_cache_bucket }}/mlflow/
       /tmp/mlflow-restore/
   when: _mlflow_gcs_check.rc == 0
