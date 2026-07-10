@@ -277,6 +277,13 @@
   environment:
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+- name: Ensure MLflow restore tmpdir exists
+  ansible.builtin.file:
+    path: /tmp/mlflow-restore
+    state: directory
+    mode: "0755"
+  when: _mlflow_gcs_check.rc == 0
+
 - name: Sync MLflow artifacts from GCS to local tmpdir
   ansible.builtin.command:
     cmd: >
