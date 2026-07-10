@@ -159,6 +159,7 @@
       -o jsonpath={.spec.clusterIP}
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   register: _rgw_cluster_ip
   changed_when: false
 
